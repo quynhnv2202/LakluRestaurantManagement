@@ -1,0 +1,74 @@
+name: Java CI with Maven and Deploy to Server
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    
+    env:
+      DB_USERNAME: ${{ secrets.DB_USERNAME }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+
+    steps:
+      # 1. Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Set up JDK 21
+      - name: Set up JDK 21
+        uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # 3. Cache Maven packages
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      # 4. Build with Maven
+      - name: Build with Maven
+        run: mvn clean install -DskipTests
+        env:
+          DB_URL: ${{ secrets.DB_URL }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          
+      # 5. Replace database credentials placeholders
+      - name: Replace database credentials
+        run: |
+          # Replace placeholders with actual values
+          sed -i "s|DBURL_PLACEHOLDER|${{ secrets.DB_URL }}|g" scripts/startup.sh
+          sed -i "s|DBUSER_PLACEHOLDER|${{ secrets.DB_USERNAME }}|g" scripts/startup.sh
+          sed -i "s|DBPASS_PLACEHOLDER|${{ secrets.DB_PASSWORD }}|g" scripts/startup.sh
+
+      # 6. Set up SSH key for connecting to the server
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      # 7. Deploy to server
+      - name: Deploy to server
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          PROJECT_DIR: /home/user/my-app
+        run: |
+          # Create project directory if it doesn't exist
+          ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_IP "mkdir -p $PROJECT_DIR"
+          
+          # Copy JAR file
+          scp target/pos-0.0.1-SNAPSHOT.jar $SERVER_USER@$SERVER_IP:$PROJECT_DIR/
+          
+          # Copy and execute startup script
+          scp scripts/startup.sh $SERVER_USER@$SERVER_IP:$PROJECT_DIR/
+          ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_IP "cd $PROJECT_DIR && chmod +x startup.sh && ./startup.sh"
